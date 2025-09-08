@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Reproductor IPTV Mejorado</title>
+    <title>Reproductor IPTV</title>
+    <!-- Configuración para PWA -->
+    <link rel="manifest" href="manifest.json">
     <!-- Incluye Hls.js desde un CDN -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <!-- Tailwind CSS para un diseño limpio y moderno -->
@@ -259,6 +261,17 @@
             </div>
             
             <div id="loading-indicator">Cargando lista...</div>
+
+            <!-- Favorites Section -->
+            <div id="favorites-list-container" class="space-y-2 mb-4">
+                <div id="favorites-header" class="category-header">
+                    <span>Favoritos</span>
+                    <i class="fas fa-chevron-down"></i>
+                </div>
+                <div id="favorites-list" class="category-content expanded">
+                    <p id="favorites-placeholder" class="text-gray-500 text-center italic mt-4" style="display:none;">No tienes canales favoritos.</p>
+                </div>
+            </div>
             
             <!-- Channel List -->
             <div id="channel-list" class="space-y-2 overflow-y-auto max-h-[calc(100vh-250px)]">
@@ -269,6 +282,17 @@
     </div>
 
     <script>
+        // Registrar el Service Worker para PWA
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js').then(registration => {
+                    console.log('Service Worker registrado con éxito:', registration);
+                }).catch(err => {
+                    console.log('Fallo el registro del Service Worker:', err);
+                });
+            });
+        }
+        
         const video = document.getElementById('video-player');
         const searchInput = document.getElementById('search-input');
         const urlInput = document.getElementById('url-input');
@@ -285,12 +309,35 @@
         const fullscreenButton = document.getElementById('fullscreen-button');
         const fullscreenIcon = document.getElementById('fullscreen-icon');
         const pictureInPictureButton = document.getElementById('picture-in-picture-button');
-        
+        const favoritesListContainer = document.getElementById('favorites-list');
+        const favoritesHeader = document.getElementById('favorites-header');
+        const favoritesPlaceholder = document.getElementById('favorites-placeholder');
+
         let hls = null;
         let allChannels = [];
+        let favorites = JSON.parse(localStorage.getItem('iptvFavorites')) || [];
         let currentActiveChannel = null;
         let networkRetryAttempts = 0;
         const maxNetworkRetries = 5;
+        
+        // Function to save favorites to localStorage
+        const saveFavorites = () => {
+            localStorage.setItem('iptvFavorites', JSON.stringify(favorites));
+        };
+
+        // Function to save the M3U URL to localStorage
+        const saveM3uUrl = (url) => {
+            localStorage.setItem('m3uUrl', url);
+        };
+        
+        // Function to load the saved M3U URL from localStorage
+        const loadM3uUrl = () => {
+            const url = localStorage.getItem('m3uUrl');
+            if (url) {
+                m3uUrlInput.value = url;
+                fetchAndParseM3U(url);
+            }
+        };
 
         // Function to load and play a video URL
         const loadVideo = (url, channelName = 'Canal Desconocido', language = 'N/A') => {
@@ -348,6 +395,7 @@
             channelLanguageBadge.style.display = (language && language.toLowerCase() !== 'n/a') ? 'inline-block' : 'none';
             currentActiveChannel = url;
             updateActiveChannel();
+            updateFavoriteStar();
         };
 
         // Parse M3U file content and extract channels with groups and language
@@ -379,21 +427,31 @@
             });
             return newChannels;
         };
-
+        
         // Render the channel list on the page, now with categories and favorites
         const renderChannelList = (channelsToRender = allChannels) => {
             channelListContainer.innerHTML = '';
-            if (channelsToRender.length === 0) {
-                channelPlaceholder.textContent = 'No se encontraron canales.';
-                channelPlaceholder.style.display = 'block';
-                return;
-            }
-            channelPlaceholder.style.display = 'none';
-
+            favoritesListContainer.innerHTML = '';
+            
             const groupedChannels = channelsToRender.reduce((acc, channel) => {
                 (acc[channel.group] = acc[channel.group] || []).push(channel);
                 return acc;
             }, {});
+            
+            // Render favorites
+            const favoriteChannels = favorites.filter(favUrl => allChannels.some(c => c.url === favUrl));
+            if (favoriteChannels.length > 0) {
+                favoritesPlaceholder.style.display = 'none';
+                favoritesListContainer.style.display = 'block';
+                favorites.forEach(favUrl => {
+                    const channel = allChannels.find(c => c.url === favUrl);
+                    if (channel) {
+                        favoritesListContainer.appendChild(createChannelItem(channel));
+                    }
+                });
+            } else {
+                favoritesPlaceholder.style.display = 'block';
+            }
 
             // Render other categories
             const sortedGroups = Object.keys(groupedChannels).sort();
@@ -406,6 +464,12 @@
                 channelListContainer.appendChild(header);
                 channelListContainer.appendChild(content);
             });
+
+            if (allChannels.length === 0) {
+                channelPlaceholder.style.display = 'block';
+            } else {
+                channelPlaceholder.style.display = 'none';
+            }
         };
 
         // Create a channel item element
@@ -461,6 +525,13 @@
             });
         };
 
+        // Update favorite star icon state
+        const updateFavoriteStar = () => {
+            const isFavorite = favorites.includes(currentActiveChannel);
+            favoriteStar.classList.toggle('favorite', isFavorite);
+            favoriteStar.style.display = currentActiveChannel ? 'inline-block' : 'none';
+        };
+
         // Function to fetch and parse M3U file from a URL
         const fetchAndParseM3U = async (url) => {
             loadingIndicator.style.display = 'block';
@@ -502,6 +573,7 @@
             const url = m3uUrlInput.value.trim();
             if (url) {
                 fetchAndParseM3U(url);
+                saveM3uUrl(url); // Save the URL after loading
             } else {
                 currentChannelName.textContent = 'Por favor, ingresa una URL de lista de canales válida.';
             }
@@ -510,6 +582,8 @@
         fileInput.addEventListener('change', (event) => {
             const file = event.target.files[0];
             if (!file) return;
+            // Clear saved M3U URL if a local file is uploaded
+            saveM3uUrl('');
 
             const reader = new FileReader();
             reader.onload = (e) => {
@@ -525,6 +599,21 @@
             reader.readAsText(file);
         });
         
+        // Toggle favorite status
+        favoriteStar.addEventListener('click', () => {
+            if (currentActiveChannel) {
+                const index = favorites.indexOf(currentActiveChannel);
+                if (index === -1) {
+                    favorites.push(currentActiveChannel);
+                } else {
+                    favorites.splice(index, 1);
+                }
+                saveFavorites();
+                renderChannelList();
+                updateFavoriteStar();
+            }
+        });
+
         // Fullscreen functionality
         fullscreenButton.addEventListener('click', () => {
             if (video.requestFullscreen) {
@@ -570,9 +659,17 @@
             );
             renderChannelList(filteredChannels);
         });
+        
+        favoritesHeader.addEventListener('click', () => {
+            const content = favoritesHeader.nextElementSibling;
+            content.classList.toggle('expanded');
+            favoritesHeader.querySelector('i').classList.toggle('fa-chevron-down');
+            favoritesHeader.querySelector('i').classList.toggle('fa-chevron-up');
+        });
 
         // Initial render
         renderChannelList();
+        loadM3uUrl(); // Load the saved URL on startup
     </script>
 </body>
 </html>
