@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Reproductor IPTV</title>
     <!-- Configuración para PWA -->
-    <link rel="manifest" href="manifest.json">
+    <link rel="manifest" href="./manifest.json">
     <!-- Incluye Hls.js desde un CDN -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <!-- Tailwind CSS para un diseño limpio y moderno -->
@@ -285,7 +285,9 @@
         // Registrar el Service Worker para PWA
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/service-worker.js').then(registration => {
+                // Obtenemos la ruta base de la URL actual para registrar el service worker
+                const basePath = location.pathname.replace(/\/[^/]*$/, '/');
+                navigator.serviceWorker.register(basePath + 'service-worker.js').then(registration => {
                     console.log('Service Worker registrado con éxito:', registration);
                 }).catch(err => {
                     console.log('Fallo el registro del Service Worker:', err);
