@@ -8,7 +8,7 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <!-- Tailwind CSS para un diseño limpio y moderno -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Font Awesome para los iconos de estrellas y pantalla completa -->
+    <!-- Font Awesome para los iconos de estrellas, pantalla completa y búsqueda -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
         body {
@@ -268,409 +268,311 @@
         </div>
     </div>
 
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInWithCustomToken, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Firebase variables
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-
-        // Initialize Firebase
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-        const auth = getAuth(app);
+    <script>
+        const video = document.getElementById('video-player');
+        const searchInput = document.getElementById('search-input');
+        const urlInput = document.getElementById('url-input');
+        const loadUrlButton = document.getElementById('load-url-button');
+        const m3uUrlInput = document.getElementById('m3u-url-input');
+        const loadM3uUrlButton = document.getElementById('load-m3u-url-button');
+        const fileInput = document.getElementById('file-input');
+        const channelListContainer = document.getElementById('channel-list');
+        const currentChannelName = document.getElementById('current-channel-name');
+        const channelLanguageBadge = document.getElementById('channel-language');
+        const channelPlaceholder = document.getElementById('channel-placeholder');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const favoriteStar = document.getElementById('favorite-star');
+        const fullscreenButton = document.getElementById('fullscreen-button');
+        const fullscreenIcon = document.getElementById('fullscreen-icon');
+        const pictureInPictureButton = document.getElementById('picture-in-picture-button');
         
-        let userId;
+        let hls = null;
+        let allChannels = [];
+        let currentActiveChannel = null;
+        let networkRetryAttempts = 0;
+        const maxNetworkRetries = 5;
 
-        // Sign in anonymously
-        async function signIn() {
-            try {
-                if (typeof __initial_auth_token !== 'undefined') {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-                userId = auth.currentUser.uid;
-                console.log("Firebase signed in with user ID:", userId);
-            } catch (error) {
-                console.error("Firebase sign-in error:", error);
+        // Function to load and play a video URL
+        const loadVideo = (url, channelName = 'Canal Desconocido', language = 'N/A') => {
+            networkRetryAttempts = 0; // Reset retry counter for new channel
+            if (!url) {
+                currentChannelName.textContent = 'No se pudo cargar el canal';
+                return;
             }
-        }
-
-        document.addEventListener('DOMContentLoaded', async () => {
-            await signIn();
-
-            const video = document.getElementById('video-player');
-            const searchInput = document.getElementById('search-input');
-            const urlInput = document.getElementById('url-input');
-            const loadUrlButton = document.getElementById('load-url-button');
-            const m3uUrlInput = document.getElementById('m3u-url-input');
-            const loadM3uUrlButton = document.getElementById('load-m3u-url-button');
-            const fileInput = document.getElementById('file-input');
-            const channelListContainer = document.getElementById('channel-list');
-            const currentChannelName = document.getElementById('current-channel-name');
-            const channelLanguageBadge = document.getElementById('channel-language');
-            const channelPlaceholder = document.getElementById('channel-placeholder');
-            const loadingIndicator = document.getElementById('loading-indicator');
-            const favoriteStar = document.getElementById('favorite-star');
-            const fullscreenButton = document.getElementById('fullscreen-button');
-            const fullscreenIcon = document.getElementById('fullscreen-icon');
-            const pictureInPictureButton = document.getElementById('picture-in-picture-button');
-            const videoContainer = document.getElementById('video-container');
-
-            let hls = null;
-            let allChannels = [];
-            let favorites = [];
-            let currentActiveChannel = null;
-            let networkRetryAttempts = 0;
-            const maxNetworkRetries = 5;
-
-            // Load favorites from Firestore
-            const loadFavorites = () => {
-                if (!userId) return;
-                const favDocRef = doc(db, `artifacts/${appId}/users/${userId}/favorites`, "userFavorites");
-                onSnapshot(favDocRef, (docSnap) => {
-                    if (docSnap.exists()) {
-                        favorites = docSnap.data().channels || [];
-                        console.log("Favorites loaded from Firestore:", favorites);
-                    } else {
-                        favorites = [];
-                    }
-                    renderChannelList();
-                });
-            };
-
-            // Save favorites to Firestore
-            const saveFavorites = async () => {
-                if (!userId) return;
-                const favDocRef = doc(db, `artifacts/${appId}/users/${userId}/favorites`, "userFavorites");
-                await setDoc(favDocRef, { channels: favorites }, { merge: true });
-                console.log("Favorites saved to Firestore.");
-            };
-
-            // Function to load and play a video URL
-            const loadVideo = (url, channelName = 'Canal Desconocido', language = 'N/A') => {
-                networkRetryAttempts = 0; // Reset retry counter for new channel
-                if (!url) {
-                    currentChannelName.textContent = 'No se pudo cargar el canal';
-                    return;
+            if (Hls.isSupported()) {
+                if (hls) {
+                    hls.destroy();
                 }
-                if (Hls.isSupported()) {
-                    if (hls) {
-                        hls.destroy();
-                    }
-                    hls = new Hls();
-                    hls.loadSource(url);
-                    hls.attachMedia(video);
-                    hls.on(Hls.Events.MANIFEST_PARSED, function() {
-                        video.play();
-                    });
-                    hls.on(Hls.Events.ERROR, function (event, data) {
-                        if (data.fatal) {
-                            switch(data.type) {
-                                case Hls.ErrorTypes.NETWORK_ERROR:
-                                    if (networkRetryAttempts < maxNetworkRetries) {
-                                        networkRetryAttempts++;
-                                        console.error(`Network error, trying to recover... Attempt ${networkRetryAttempts}/${maxNetworkRetries}`);
-                                        currentChannelName.textContent = `Error de red. Intentando reconectar... (${networkRetryAttempts}/${maxNetworkRetries})`;
-                                        setTimeout(() => {
-                                            hls.startLoad();
-                                        }, 2000); // Wait 2 seconds before retrying
-                                    } else {
-                                        console.error("Fatal network error. Exceeded max retry attempts.");
-                                        currentChannelName.textContent = "Error de red persistente. No se pudo reconectar.";
-                                        hls.destroy();
-                                    }
-                                    break;
-                                case Hls.ErrorTypes.MEDIA_ERROR:
-                                    console.error("Media error, trying to recover...");
-                                    hls.recoverMediaError();
-                                    break;
-                                default:
+                hls = new Hls();
+                hls.loadSource(url);
+                hls.attachMedia(video);
+                hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                    video.play();
+                });
+                hls.on(Hls.Events.ERROR, function (event, data) {
+                    if (data.fatal) {
+                        switch(data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                if (networkRetryAttempts < maxNetworkRetries) {
+                                    networkRetryAttempts++;
+                                    console.error(`Network error, trying to recover... Attempt ${networkRetryAttempts}/${maxNetworkRetries}`);
+                                    currentChannelName.textContent = `Error de red. Intentando reconectar... (${networkRetryAttempts}/${maxNetworkRetries})`;
+                                    setTimeout(() => {
+                                        hls.startLoad();
+                                    }, 2000); // Wait 2 seconds before retrying
+                                } else {
+                                    console.error("Fatal network error. Exceeded max retry attempts.");
+                                    currentChannelName.textContent = "Error de red persistente. No se pudo reconectar.";
                                     hls.destroy();
-                                    console.error("Fatal error. Hls.js destroyed.");
-                                    break;
-                            }
+                                }
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                console.error("Media error, trying to recover...");
+                                hls.recoverMediaError();
+                                break;
+                            default:
+                                hls.destroy();
+                                console.error("Fatal error. Hls.js destroyed.");
+                                break;
                         }
-                    });
-                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                    video.src = url;
-                    video.addEventListener('loadedmetadata', function() {
-                        video.play();
-                    });
-                }
-                currentChannelName.textContent = channelName;
-                channelLanguageBadge.textContent = language;
-                channelLanguageBadge.style.display = (language && language.toLowerCase() !== 'n/a') ? 'inline-block' : 'none';
-                currentActiveChannel = url;
-                updateActiveChannel();
-                updateFavoriteStar();
-            };
-
-            // Parse M3U file content and extract channels with groups and language
-            const parseM3U = (content) => {
-                const lines = content.split('\n');
-                let newChannels = [];
-                let currentChannel = {};
-
-                lines.forEach(line => {
-                    line = line.trim();
-                    if (line.startsWith('#EXTINF:')) {
-                        const nameMatch = line.match(/tvg-name="([^"]+)"/);
-                        const logoMatch = line.match(/tvg-logo="([^"]+)"/);
-                        const groupMatch = line.match(/group-title="([^"]+)"/);
-                        const langMatch = line.match(/tvg-language="([^"]+)"/);
-                        const titleMatch = line.match(/,([^,]+)$/);
-
-                        currentChannel.name = nameMatch ? nameMatch[1] : (titleMatch ? titleMatch[1] : 'Canal Desconocido');
-                        currentChannel.logo = logoMatch ? logoMatch[1] : null;
-                        currentChannel.group = groupMatch ? groupMatch[1] : 'Otros';
-                        currentChannel.language = langMatch ? langMatch[1] : 'N/A';
-                    } else if (line.startsWith('http')) {
-                        currentChannel.url = line;
-                        if (currentChannel.name) {
-                             newChannels.push({ ...currentChannel });
-                        }
-                        currentChannel = {};
                     }
                 });
-                return newChannels;
-            };
-
-            // Render the channel list on the page, now with categories and favorites
-            const renderChannelList = (channelsToRender = allChannels) => {
-                channelListContainer.innerHTML = '';
-                if (channelsToRender.length === 0) {
-                    channelPlaceholder.textContent = 'No se encontraron canales.';
-                    channelPlaceholder.style.display = 'block';
-                    return;
-                }
-                channelPlaceholder.style.display = 'none';
-
-                const groupedChannels = channelsToRender.reduce((acc, channel) => {
-                    (acc[channel.group] = acc[channel.group] || []).push(channel);
-                    return acc;
-                }, {});
-
-                // Render favorites section
-                const favoriteChannels = channelsToRender.filter(channel => favorites.includes(channel.url));
-                if (favoriteChannels.length > 0) {
-                    const favoritesHeader = createCategoryHeader('Favoritos');
-                    const favoritesContent = createCategoryContent();
-                    favoriteChannels.forEach(channel => {
-                        favoritesContent.appendChild(createChannelItem(channel));
-                    });
-                    channelListContainer.appendChild(favoritesHeader);
-                    channelListContainer.appendChild(favoritesContent);
-                }
-
-                // Render other categories
-                const sortedGroups = Object.keys(groupedChannels).sort();
-                sortedGroups.forEach(group => {
-                    const header = createCategoryHeader(group);
-                    const content = createCategoryContent();
-                    groupedChannels[group].forEach(channel => {
-                        content.appendChild(createChannelItem(channel));
-                    });
-                    channelListContainer.appendChild(header);
-                    channelListContainer.appendChild(content);
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = url;
+                video.addEventListener('loadedmetadata', function() {
+                    video.play();
                 });
-            };
+            }
+            currentChannelName.textContent = channelName;
+            channelLanguageBadge.textContent = language;
+            channelLanguageBadge.style.display = (language && language.toLowerCase() !== 'n/a') ? 'inline-block' : 'none';
+            currentActiveChannel = url;
+            updateActiveChannel();
+        };
 
-            // Create a channel item element
-            const createChannelItem = (channel) => {
-                const channelItem = document.createElement('div');
-                channelItem.className = 'channel-item flex items-center p-3 rounded-lg cursor-pointer transition-colors hover:bg-gray-700';
-                channelItem.dataset.url = channel.url;
+        // Parse M3U file content and extract channels with groups and language
+        const parseM3U = (content) => {
+            const lines = content.split('\n');
+            let newChannels = [];
+            let currentChannel = {};
 
-                if (currentActiveChannel === channel.url) {
-                    channelItem.classList.add('active');
+            lines.forEach(line => {
+                line = line.trim();
+                if (line.startsWith('#EXTINF:')) {
+                    const nameMatch = line.match(/tvg-name="([^"]+)"/);
+                    const logoMatch = line.match(/tvg-logo="([^"]+)"/);
+                    const groupMatch = line.match(/group-title="([^"]+)"/);
+                    const langMatch = line.match(/tvg-language="([^"]+)"/);
+                    const titleMatch = line.match(/,([^,]+)$/);
+
+                    currentChannel.name = nameMatch ? nameMatch[1] : (titleMatch ? titleMatch[1] : 'Canal Desconocido');
+                    currentChannel.logo = logoMatch ? logoMatch[1] : null;
+                    currentChannel.group = groupMatch ? groupMatch[1] : 'Otros';
+                    currentChannel.language = langMatch ? langMatch[1] : 'N/A';
+                } else if (line.startsWith('http')) {
+                    currentChannel.url = line;
+                    if (currentChannel.name) {
+                         newChannels.push({ ...currentChannel });
+                    }
+                    currentChannel = {};
                 }
-                
-                const logoHtml = channel.logo ? `<img src="${channel.logo}" alt="Logo" class="channel-logo w-8 h-8 rounded-md mr-3 object-fit: cover;">` : `<div class="w-8 h-8 rounded-md mr-3 bg-gray-600 flex items-center justify-center text-xs font-semibold">${channel.name.charAt(0)}</div>`;
-                const languageHtml = (channel.language && channel.language.toLowerCase() !== 'n/a') ? `<span class="ml-auto lang-badge">${channel.language}</span>` : '';
+            });
+            return newChannels;
+        };
 
-                channelItem.innerHTML = `${logoHtml} <span class="truncate">${channel.name}</span>${languageHtml}`;
-                
-                channelItem.addEventListener('click', () => {
-                    loadVideo(channel.url, channel.name, channel.language);
+        // Render the channel list on the page, now with categories and favorites
+        const renderChannelList = (channelsToRender = allChannels) => {
+            channelListContainer.innerHTML = '';
+            if (channelsToRender.length === 0) {
+                channelPlaceholder.textContent = 'No se encontraron canales.';
+                channelPlaceholder.style.display = 'block';
+                return;
+            }
+            channelPlaceholder.style.display = 'none';
+
+            const groupedChannels = channelsToRender.reduce((acc, channel) => {
+                (acc[channel.group] = acc[channel.group] || []).push(channel);
+                return acc;
+            }, {});
+
+            // Render other categories
+            const sortedGroups = Object.keys(groupedChannels).sort();
+            sortedGroups.forEach(group => {
+                const header = createCategoryHeader(group);
+                const content = createCategoryContent();
+                groupedChannels[group].forEach(channel => {
+                    content.appendChild(createChannelItem(channel));
                 });
-                return channelItem;
-            };
+                channelListContainer.appendChild(header);
+                channelListContainer.appendChild(content);
+            });
+        };
+
+        // Create a channel item element
+        const createChannelItem = (channel) => {
+            const channelItem = document.createElement('div');
+            channelItem.className = 'channel-item flex items-center p-3 rounded-lg cursor-pointer transition-colors hover:bg-gray-700';
+            channelItem.dataset.url = channel.url;
+
+            if (currentActiveChannel === channel.url) {
+                channelItem.classList.add('active');
+            }
             
-            // Create a category header element
-            const createCategoryHeader = (title) => {
-                const header = document.createElement('div');
-                header.className = 'category-header';
-                header.innerHTML = `<span>${title}</span> <i class="fas fa-chevron-down"></i>`;
-                header.addEventListener('click', () => {
-                    const content = header.nextElementSibling;
-                    content.classList.toggle('expanded');
-                    header.querySelector('i').classList.toggle('fa-chevron-down');
-                    header.querySelector('i').classList.toggle('fa-chevron-up');
-                });
-                return header;
-            };
+            const logoHtml = channel.logo ? `<img src="${channel.logo}" alt="Logo" class="channel-logo w-8 h-8 rounded-md mr-3 object-fit: cover;">` : `<div class="w-8 h-8 rounded-md mr-3 bg-gray-600 flex items-center justify-center text-xs font-semibold">${channel.name.charAt(0)}</div>`;
+            const languageHtml = (channel.language && channel.language.toLowerCase() !== 'n/a') ? `<span class="ml-auto lang-badge">${channel.language}</span>` : '';
 
-            // Create a category content container
-            const createCategoryContent = () => {
-                const content = document.createElement('div');
-                content.className = 'category-content';
-                return content;
-            };
-
-            // Highlight the currently playing channel
-            const updateActiveChannel = () => {
-                const items = document.querySelectorAll('.channel-item');
-                items.forEach(item => {
-                    item.classList.remove('active');
-                    if (item.dataset.url === currentActiveChannel) {
-                        item.classList.add('active');
-                    }
-                });
-            };
-
-            // Update favorite star icon state
-            const updateFavoriteStar = () => {
-                const isFavorite = favorites.includes(currentActiveChannel);
-                favoriteStar.style.display = currentActiveChannel ? 'inline' : 'none';
-                favoriteStar.classList.toggle('favorite', isFavorite);
-            };
-
-            // Function to fetch and parse M3U file from a URL
-            const fetchAndParseM3U = async (url) => {
-                loadingIndicator.style.display = 'block';
-                channelListContainer.innerHTML = '';
-                channelPlaceholder.style.display = 'none';
-                try {
-                    // Nota: Las peticiones a URLs de otros dominios pueden ser bloqueadas por la política de seguridad CORS.
-                    // Si la carga falla, la mejor solución es descargar el archivo y cargarlo localmente.
-                    const response = await fetch(url);
-                    console.log('Respuesta de la URL M3U:', response);
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    const content = await response.text();
-                    allChannels = parseM3U(content);
-                    renderChannelList();
-                    if (allChannels.length > 0) {
-                        loadVideo(allChannels[0].url, allChannels[0].name, allChannels[0].language);
-                    } else {
-                        currentChannelName.textContent = 'No se encontraron canales en la lista.';
-                    }
-                } catch (error) {
-                    console.error('Error al cargar la lista de canales:', error);
-                    currentChannelName.textContent = `Error: No se pudo cargar la lista de canales. Detalle: ${error.message}. Por favor, asegúrate de que la URL es correcta y accesible.`;
-                } finally {
-                    loadingIndicator.style.display = 'none';
-                }
-            };
+            channelItem.innerHTML = `${logoHtml} <span class="truncate">${channel.name}</span>${languageHtml}`;
             
-            // Event listeners
-            loadUrlButton.addEventListener('click', () => {
-                const url = urlInput.value.trim();
-                if (url) {
-                    loadVideo(url, 'URL Directa');
+            channelItem.addEventListener('click', () => {
+                loadVideo(channel.url, channel.name, channel.language);
+            });
+            return channelItem;
+        };
+        
+        // Create a category header element
+        const createCategoryHeader = (title) => {
+            const header = document.createElement('div');
+            header.className = 'category-header';
+            header.innerHTML = `<span>${title}</span> <i class="fas fa-chevron-down"></i>`;
+            header.addEventListener('click', () => {
+                const content = header.nextElementSibling;
+                content.classList.toggle('expanded');
+                header.querySelector('i').classList.toggle('fa-chevron-down');
+                header.querySelector('i').classList.toggle('fa-chevron-up');
+            });
+            return header;
+        };
+
+        // Create a category content container
+        const createCategoryContent = () => {
+            const content = document.createElement('div');
+            content.className = 'category-content';
+            return content;
+        };
+
+        // Highlight the currently playing channel
+        const updateActiveChannel = () => {
+            const items = document.querySelectorAll('.channel-item');
+            items.forEach(item => {
+                item.classList.remove('active');
+                if (item.dataset.url === currentActiveChannel) {
+                    item.classList.add('active');
+                }
+            });
+        };
+
+        // Function to fetch and parse M3U file from a URL
+        const fetchAndParseM3U = async (url) => {
+            loadingIndicator.style.display = 'block';
+            channelListContainer.innerHTML = '';
+            channelPlaceholder.style.display = 'none';
+            try {
+                const response = await fetch(url);
+                console.log('Respuesta de la URL M3U:', response);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const content = await response.text();
+                allChannels = parseM3U(content);
+                renderChannelList();
+                if (allChannels.length > 0) {
+                    loadVideo(allChannels[0].url, allChannels[0].name, allChannels[0].language);
                 } else {
-                    currentChannelName.textContent = 'Por favor, ingresa una URL válida.';
+                    currentChannelName.textContent = 'No se encontraron canales en la lista.';
                 }
-            });
-
-            loadM3uUrlButton.addEventListener('click', () => {
-                const url = m3uUrlInput.value.trim();
-                if (url) {
-                    fetchAndParseM3U(url);
-                } else {
-                    currentChannelName.textContent = 'Por favor, ingresa una URL de lista de canales válida.';
-                }
-            });
-
-            fileInput.addEventListener('change', (event) => {
-                const file = event.target.files[0];
-                if (!file) return;
-
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    const content = e.target.result;
-                    allChannels = parseM3U(content);
-                    renderChannelList();
-                    if (allChannels.length > 0) {
-                        loadVideo(allChannels[0].url, allChannels[0].name, allChannels[0].language);
-                    } else {
-                        currentChannelName.textContent = 'No se encontraron canales en el archivo.';
-                    }
-                };
-                reader.readAsText(file);
-            });
-            
-            favoriteStar.addEventListener('click', () => {
-                if (currentActiveChannel) {
-                    const isFavorite = favorites.includes(currentActiveChannel);
-                    if (isFavorite) {
-                        favorites = favorites.filter(favUrl => favUrl !== currentActiveChannel);
-                    } else {
-                        favorites.push(currentActiveChannel);
-                    }
-                    saveFavorites();
-                    updateFavoriteStar();
-                    renderChannelList(); // Re-render to update the favorites section
-                }
-            });
-
-            fullscreenButton.addEventListener('click', () => {
-                // Intenta activar la pantalla completa, pero si falla, probablemente se deba a restricciones del entorno.
-                if (video.requestFullscreen) {
-                    video.requestFullscreen().catch(err => {
-                        console.error("Error al intentar pantalla completa: ", err);
-                        // No mostrar alerta, solo log en consola y mensaje de interfaz
-                        currentChannelName.textContent = "La pantalla completa no está permitida en este entorno. Por favor, usa la función 'Picture-in-Picture' como alternativa.";
-                    });
-                } else if (video.webkitRequestFullscreen) { /* Safari */
-                    video.webkitRequestFullscreen();
-                } else if (video.msRequestFullscreen) { /* IE11 */
-                    video.msRequestFullscreen();
-                } else {
-                    currentChannelName.textContent = "Tu navegador no soporta la función de pantalla completa.";
-                }
-            });
-
-            // Listen for fullscreen changes to update the button icon
-            document.addEventListener('fullscreenchange', () => {
-                if (document.fullscreenElement) {
-                    fullscreenIcon.classList.remove('fa-expand');
-                    fullscreenIcon.classList.add('fa-compress');
-                } else {
-                    fullscreenIcon.classList.remove('fa-compress');
-                    fullscreenIcon.classList.add('fa-expand');
-                }
-            });
-
-            // Picture-in-Picture functionality
-            pictureInPictureButton.addEventListener('click', () => {
-                if (document.pictureInPictureElement) {
-                    document.exitPictureInPicture();
-                } else if (document.pictureInPictureEnabled) {
-                    video.requestPictureInPicture();
-                }
-            });
-
-            // Search functionality
-            searchInput.addEventListener('input', (e) => {
-                const searchTerm = e.target.value.toLowerCase();
-                const filteredChannels = allChannels.filter(channel => 
-                    channel.name.toLowerCase().includes(searchTerm) || 
-                    (channel.language && channel.language.toLowerCase().includes(searchTerm))
-                );
-                renderChannelList(filteredChannels);
-            });
-
-            // Initial load of favorites
-            if (userId) {
-                loadFavorites();
+            } catch (error) {
+                console.error('Error al cargar la lista de canales:', error);
+                currentChannelName.textContent = `Error: No se pudo cargar la lista de canales. Detalle: ${error.message}. Por favor, asegúrate de que la URL es correcta y accesible.`;
+            } finally {
+                loadingIndicator.style.display = 'none';
+            }
+        };
+        
+        // Event listeners
+        loadUrlButton.addEventListener('click', () => {
+            const url = urlInput.value.trim();
+            if (url) {
+                loadVideo(url, 'URL Directa');
+            } else {
+                currentChannelName.textContent = 'Por favor, ingresa una URL válida.';
             }
         });
+
+        loadM3uUrlButton.addEventListener('click', () => {
+            const url = m3uUrlInput.value.trim();
+            if (url) {
+                fetchAndParseM3U(url);
+            } else {
+                currentChannelName.textContent = 'Por favor, ingresa una URL de lista de canales válida.';
+            }
+        });
+
+        fileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const content = e.target.result;
+                allChannels = parseM3U(content);
+                renderChannelList();
+                if (allChannels.length > 0) {
+                    loadVideo(allChannels[0].url, allChannels[0].name, allChannels[0].language);
+                } else {
+                    currentChannelName.textContent = 'No se encontraron canales en el archivo.';
+                }
+            };
+            reader.readAsText(file);
+        });
+        
+        // Fullscreen functionality
+        fullscreenButton.addEventListener('click', () => {
+            if (video.requestFullscreen) {
+                video.requestFullscreen().catch(err => {
+                    console.error("Error al intentar pantalla completa: ", err);
+                    currentChannelName.textContent = "La pantalla completa no está permitida en este entorno.";
+                });
+            } else if (video.webkitRequestFullscreen) { /* Safari */
+                video.webkitRequestFullscreen();
+            } else if (video.msRequestFullscreen) { /* IE11 */
+                video.msRequestFullscreen();
+            } else {
+                currentChannelName.textContent = "Tu navegador no soporta la función de pantalla completa.";
+            }
+        });
+
+        // Listen for fullscreen changes to update the button icon
+        document.addEventListener('fullscreenchange', () => {
+            if (document.fullscreenElement) {
+                fullscreenIcon.classList.remove('fa-expand');
+                fullscreenIcon.classList.add('fa-compress');
+            } else {
+                fullscreenIcon.classList.remove('fa-compress');
+                fullscreenIcon.classList.add('fa-expand');
+            }
+        });
+
+        // Picture-in-Picture functionality
+        pictureInPictureButton.addEventListener('click', () => {
+            if (document.pictureInPictureElement) {
+                document.exitPictureInPicture();
+            } else if (document.pictureInPictureEnabled) {
+                video.requestPictureInPicture();
+            }
+        });
+
+        // Search functionality
+        searchInput.addEventListener('input', (e) => {
+            const searchTerm = e.target.value.toLowerCase();
+            const filteredChannels = allChannels.filter(channel => 
+                channel.name.toLowerCase().includes(searchTerm) || 
+                (channel.language && channel.language.toLowerCase().includes(searchTerm))
+            );
+            renderChannelList(filteredChannels);
+        });
+
+        // Initial render
+        renderChannelList();
     </script>
 </body>
 </html>
