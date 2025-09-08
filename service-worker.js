@@ -1,7 +1,7 @@
 const CACHE_NAME = 'iptv-player-cache-v1';
 const urlsToCache = [
   './',
-  './iptv_player_pwa.html',
+  './index.html',
   './manifest.json',
   'https://cdn.jsdelivr.net/npm/hls.js@latest',
   'https://cdn.tailwindcss.com',
